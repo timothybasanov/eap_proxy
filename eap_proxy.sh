@@ -5,7 +5,8 @@
 IF_WAN=eth0
 IF_ROUTER=eth2
 CONFIG_OPTIONS=(
-    --restart-dhcp --ignore-when-wan-up --ignore-logoff --ping-gateway)
+    --restart-dhcp --ignore-when-wan-up --ignore-logoff
+    --ping-gateway --set-mac)
 DAEMON_OPTIONS=(--daemon --pidfile /var/run/eap_proxy.pid --syslog)
 /usr/bin/python /config/scripts/eap_proxy.py \
     "$IF_WAN" "$IF_ROUTER" "${CONFIG_OPTIONS[@]}" "${DAEMON_OPTIONS[@]}" &

@@ -8,85 +8,51 @@ Inspired by 1x_prox as posted here:
 
 AT&T Residential Gateway Bypass - True bridge mode!
 
-## Instructions (EdgeRouter)
-
-- Copy `eap_proxy.sh` to `/config/scripts/post-config.d/eap_proxy.sh`
-- Copy `eap_proxy.py` to `/config/scripts/eap_proxy.py`
-- Adjust the settings in `eap_proxy.sh` as appropriate per the usage instructions below.
-
 ## Instructions (USG)
 
 Please see <https://blog.taylorsmith.xyz/att-uverse-modem-bypass-unifi-usg/>
+for detailed instructions.
 
-## EdgeRouter Sample Configuration
+Instructions summary:
 
-Here's an excerpt of my EdgeRouter configuration:
+1. Connect AT&T gateway into WAN2 on USG, ONT into WAN on USG
+1. Use UniFi UI to configure USG:
+  1. Configure WAN
+     1. Enable DHCPv6 (prefix 60) and VLAN 0 on WAN
+     1. New IPv6 firewall rule to accept ICMPv6 on WAN IN
+  1. Configure WAN2
+     1. Disable VOIP as WAN2
+     1. Create a corp network 192.168.1.254/30 on WAN2
+  1. Configure LAN
+     1. Enable IPv6 on LAN (enable DHCPv6 ?)
+     1. Configure IPv6 DNS?
+1. Setup magical shell/python scripts:
+   1. Copy them to USG
+      ```sh
+      cat eap_proxy.py | ssh gateway sudo tee /config/scripts/eap_proxy.py
+      cat eap_proxy.sh | ssh gateway sudo tee /config/scripts/post-config.d/eap_proxy.sh
+      ssh gateway sudo chmod +x /config/scripts/post-config.d/eap_proxy.sh
+      ```
+   1. Verify that everything works:
+      ```sh
+      ssh gateway sudo python /config/scripts/eap_proxy.py \
+        --restart-dhcp --ignore-when-wan-up --ignore-logoff \
+        --ping-gateway --set-mac eth0 eth2
+      ```
+      And power cycle AT&T gateway, wait 5 min and see many `EAP packet` in logs
+      and finally `restarting dhclient`.
+      You should be able to access internet now.
+   1. Restart USG and verify that you connect back to the internet.
 
-```
-set interfaces ethernet eth0 description WAN
-set interfaces ethernet eth0 duplex auto
-set interfaces ethernet eth0 firewall in name WAN_IN
-set interfaces ethernet eth0 firewall local name WAN_LOCAL
-set interfaces ethernet eth0 speed auto
-set interfaces ethernet eth0 vif 0 address dhcp
-set interfaces ethernet eth0 vif 0 description 'WAN VLAN 0'
-set interfaces ethernet eth0 vif 0 dhcp-options default-route update
-set interfaces ethernet eth0 vif 0 dhcp-options default-route-distance 210
-set interfaces ethernet eth0 vif 0 dhcp-options name-server update
-set interfaces ethernet eth0 vif 0 firewall in name WAN_IN
-set interfaces ethernet eth0 vif 0 firewall local name WAN_LOCAL
-set interfaces ethernet eth0 vif 0 mac 'aa:bb:cc:dd:ee:ff'
-set interfaces ethernet eth1 address 192.168.1.1/24
-set interfaces ethernet eth1 description LAN
-set interfaces ethernet eth1 duplex auto
-set interfaces ethernet eth1 speed auto
-set interfaces ethernet eth2 description 'AT&T router'
-set interfaces ethernet eth2 duplex auto
-set interfaces ethernet eth2 speed auto
-set service nat rule 5010 description 'masquerade for WAN'
-set service nat rule 5010 outbound-interface eth0.0
-set service nat rule 5010 protocol all
-set service nat rule 5010 type masquerade
-set system offload ipv4 vlan enable
-```
+> Debugging when something goes wrong:
+> ```sh
+> # Check logs
+> tail -n 500 -f /var/log/messages
+> # Verify service is running
+> pa sux | grep eap
+> ```
 
-Update the MAC address for `eth0 vif 0` to that of your AT&T router, or let `eap_proxy` do it with the `--set-mac` option. I prefer to set it in my router config.
-
-Note the `set system offload ipv4 vlan enable` command or you'll have horrible routing performance.
-
-Don't forget to update the rest of your config to reference `eth0.0` as your WAN interface as needed.
-
-I previously had IPv6 working via 6rd before my area was on native dual-stack. Here's the relevant 6rd configuration from that time:
-
-```
-set interfaces tunnel tun0 6rd-prefix '2602:300::/28'
-set interfaces tunnel tun0 6rd-default-gw '::12.83.49.81'
-set interfaces tunnel tun0 address '2602:30x:xxxx:xxxx::1/60'
-set interfaces tunnel tun0 description 'AT&T 6rd tunnel'
-set interfaces tunnel tun0 encapsulation sit
-set interfaces tunnel tun0 firewall in ipv6-name WAN6_IN
-set interfaces tunnel tun0 firewall local ipv6-name WAN6_LOCAL
-set interfaces tunnel tun0 local-ip YY.YY.YY.YY
-set interfaces tunnel tun0 multicast disable
-set interfaces tunnel tun0 ttl 255
-set service dhcp-server use-dnsmasq enable
-set service dns forwarding options enable-ra
-set service dns forwarding options 'dhcp-range=::1,constructor:eth1,ra-names,86400'
-set system offload ipv6 forwarding enable
-```
-
-The `6rd-prefix` and `6rd-default-gw` should be the same for all AT&T customers that are using 6rd. The `local-ip` is your DHCP-issued WAN IP. The `tun0 address` is your 6rd delegated prefix. It is based on your WAN IP and can be computed with this bit of python:
-
-```
-python -c 'import sys;a,b,c,d=map(int,sys.argv[1].split("."));print "2602:30%x:%x%02x%x:%x%02x0::1/60" % (a>>4,a&15,b,c>>4,c&15,d)' 1.2.3.4
-2602:300:1020:3040::1/60
-```
-
-If you aren't already using `dnsmasq` for DHCP, you might want to use `radvd` instead. [See the example here](https://help.ubnt.com/hc/en-us/articles/204960044-EdgeRouter-Enable-IPv6-support-via-CLI) (it's the `router-advert` section).
-
-For configuring IPv6 in areas that are on native dual-stack, please see the discussion in https://github.com/jaysoffian/eap_proxy/issues/3. FWIW, though I was able to get IPv6 to work correctly, I eventually disabled it for a couple reasons. First, AT&T's IPv6 network was flakey for me, and sometimes sites would randomly become unreachable. Second, even when IPv6 was working correctly, the latency for me to many sites was always significantly higher than over IPv4. YMMV.
-
-Good luck. This proxy continues to work well for me. I originally developed it for use on an EdgeRouter Lite running EdgeOS v1.9.1.1. As of Sep 2018, I'm using it on an EdgeRouter 4 running EdgeOS v1.10.5. I know that it has also been used successfully on the ER-X and USG.
+> Note: After factory reset EAP proxy scripts would be lost.
 
 ## Usage
 
